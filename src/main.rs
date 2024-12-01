@@ -35,6 +35,13 @@ struct Args {
     config: Option<String>,
 }
 
+#[derive(Debug, PartialEq)]
+enum InsertionMode {
+    Append,
+    Prepend,
+    Insert,
+}
+
 fn process_path(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Config, root_path: &Path, output_path: &str) -> eyre::Result<()> {
     for entry in walkdir::WalkDir::new(path) {
         let entry = entry?;
@@ -152,11 +159,84 @@ fn process_chunk(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Con
     // Create the exact marker to search for
     let chunk_marker = format!("tmpl:{}", chunk_id);
     
+    // Parse chunk arguments structure
+    #[derive(Debug)]
+    struct ChunkArg {
+        name: String,
+        value: Option<String>,
+    }
+
+    fn parse_insertion_mode(line: &str, chunk_args: &Vec<ChunkArg>) -> InsertionMode {
+        let mode = if chunk_args.iter().any(|arg| arg.name == "append") {
+            InsertionMode::Append
+        } else if chunk_args.iter().any(|arg| arg.name == "insert") {
+            InsertionMode::Insert 
+        } else {
+            // Default to prepend if no mode specified
+            InsertionMode::Prepend
+        };
+        mode
+    }
+
+    // Function to parse chunk arguments
+    fn parse_chunk_args(line: &str, chunk_marker: &str) -> Vec<ChunkArg> {
+        if let Some(args_part) = line.split(&chunk_marker).nth(1) {
+            args_part
+                .split(':')
+                .skip(1) // Skip the empty part after the marker
+                .filter(|arg| !arg.trim().is_empty())
+                .map(|arg| {
+                    let arg = arg.trim();
+                    if let Some((name, value)) = arg.split_once('=') {
+                        // Handle quoted values
+                        let value = value.trim();
+                        let value = if value.starts_with('"') && value.ends_with('"') {
+                            value[1..value.len()-1].to_string()
+                        } else {
+                            value.split_whitespace().next().unwrap_or(value).to_string()
+                        };
+                        ChunkArg {
+                            name: name.to_string(),
+                            value: Some(value),
+                        }
+                    } else {
+                        ChunkArg {
+                            name: arg.split_whitespace().next().unwrap_or(arg).to_string(),
+                            value: None,
+                        }
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
     let mut new_content = String::new();
     for line in lines {
         if line.contains(&chunk_marker) {
-            new_content.push_str(&rendered_chunk);
-            new_content.push('\n');
+            // Should ensure that the marker ends with a whitespace or line ending. For example, tmpl:test_this should not be matched when the chunk_marker is tmpl:test
+            let marker_end = &line[line.find(&chunk_marker).unwrap() + chunk_marker.len()..];
+            if marker_end.starts_with(|c: char| c.is_whitespace()) || marker_end.is_empty() {
+                let chunk_args = parse_chunk_args(line, &chunk_marker);
+                println!("Found chunk args: {:?}", chunk_args);
+                let mode = parse_insertion_mode(line, &chunk_args);
+                if mode == InsertionMode::Prepend {
+                new_content.push_str(&rendered_chunk);
+                new_content.push('\n');
+            } else if mode == InsertionMode::Append {
+                new_content.push_str(line);
+                new_content.push('\n');
+                new_content.push_str(&rendered_chunk);
+                new_content.push('\n');
+                continue;
+            } else if mode == InsertionMode::Insert {
+                // To be implemented. This will insert it inline.
+                // Will need to account for position based on comment.
+                // for instance it will need to account for if they put a space after the comment character
+                // or if comments require multiple characters (// or /*)
+                }
+            }
         }
         new_content.push_str(line);
         new_content.push('\n');
