@@ -1,0 +1,3 @@
+path_rewrites:
+  - from: "test"
+    to: "test_rewrite"
