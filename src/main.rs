@@ -1,16 +1,23 @@
 use clap::Parser;
 use std::path::{Path, PathBuf};
-#[derive(serde::Deserialize, Debug)]
+use lazy_static::lazy_static;
+use std::sync::RwLock;
+
+#[derive(serde::Deserialize, Debug, Clone)]
 struct PathRewrite {
     from: String,
     to: String,
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(serde::Deserialize, Debug, Clone)]
 struct Config {
     path_rewrites: Vec<PathRewrite>,
     #[serde(default)]
     args: std::collections::HashMap<String, String>,
+}
+
+lazy_static! {
+    static ref GLOBAL_CONFIG: RwLock<Option<Config>> = RwLock::new(None);
 }
 
 fn read_config(path: &str) -> eyre::Result<Config> {
@@ -44,19 +51,19 @@ enum InsertionMode {
     Insert,
 }
 
-fn process_path(path: &str, args: &std::collections::HashMap<String, String>, config: &Config, root_path: &Path, output_path: &str) -> eyre::Result<()> {
+fn process_path(path: &str, root_path: &Path, output_path: &str) -> eyre::Result<()> {
     for entry in walkdir::WalkDir::new(path) {
         let entry = entry?;
         let path = entry.path();
         
         if path.is_file() && path.extension().map_or(false, |ext| ext == "tmpl") {
-            process_file(path.to_str().unwrap(), args, config, root_path, output_path)?;
+            process_file(path.to_str().unwrap(), root_path, output_path)?;
         }
         if path.is_file() && {
             let file_name = path.file_name().map_or("", |f| f.to_str().unwrap_or(""));
             file_name.contains("tmpl_") || (file_name.contains(".tmpl."))
         } {
-            process_chunk(path.to_str().unwrap(), args, config, root_path, output_path)?;
+            process_chunk(path.to_str().unwrap(), root_path, output_path)?;
         }
     }
     Ok(())
@@ -76,12 +83,14 @@ fn apply_path_rewrites(path: &str, rewrites: &[PathRewrite], data: &serde_json::
     Ok(result)
 }
 
-fn process_file(path: &str, args: &std::collections::HashMap<String, String>, config: &Config, root_path: &Path, output_path: &str) -> eyre::Result<()> {
+fn process_file(path: &str, root_path: &Path, output_path: &str) -> eyre::Result<()> {
+    let config = GLOBAL_CONFIG.read().unwrap();
+    let config = config.as_ref().unwrap();
     let template_content = std::fs::read_to_string(path)?;
     let handlebars = handlebars::Handlebars::new();
     
     let mut data = serde_json::Map::new();
-    for (key, value) in args {
+    for (key, value) in &config.args {
         data.insert(key.clone(), serde_json::Value::String(value.clone()));
     }
     
@@ -111,13 +120,15 @@ fn process_file(path: &str, args: &std::collections::HashMap<String, String>, co
     Ok(())
 }
 
-fn process_chunk(path: &str, args: &std::collections::HashMap<String, String>, config: &Config, root_path: &Path, output_path: &str) -> eyre::Result<()> {
+fn process_chunk(path: &str, root_path: &Path, output_path: &str) -> eyre::Result<()> {
+    let config = GLOBAL_CONFIG.read().unwrap();
+    let config = config.as_ref().unwrap();
     // Read and render the chunk template
     let template_content = std::fs::read_to_string(path)?;
     let handlebars = handlebars::Handlebars::new();
     
     let mut data = serde_json::Map::new();
-    for (key, value) in args {
+    for (key, value) in &config.args {
         data.insert(key.clone(), serde_json::Value::String(value.clone()));
     }
     let rendered_chunk = handlebars.render_template(&template_content, &data)?;
@@ -261,7 +272,7 @@ fn main() -> eyre::Result<()> {
     println!("Config path: {}", config_path.display());
     let mut config = read_config(config_path.to_str().unwrap())?;
 
-    // Convert CLI args into key-value pairs
+    // Convert CLI args into key-value pairs and merge with config args
     let cli_pairs: std::collections::HashMap<String, String> = args.dynamic
         .chunks(2)
         .map(|chunk| {
@@ -277,8 +288,11 @@ fn main() -> eyre::Result<()> {
     println!("Path: {}", args.path);
     println!("Combined args: {:?}", config.args);
 
+    // Store config globally
+    *GLOBAL_CONFIG.write().unwrap() = Some(config);
+
     let output_dir = args.output.as_deref().unwrap_or_else(|| current_dir.to_str().unwrap());
-    // Pass config.args instead of dynamic_pairs
-    process_path(&args.path, &config.args, &config, base_path, output_dir)?;
+    // Remove args parameter from process_path call
+    process_path(&args.path, base_path, output_dir)?;
     Ok(())
 }

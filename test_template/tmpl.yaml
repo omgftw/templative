@@ -1,7 +1,7 @@
 path_rewrites:
-  - from: "_test_"
+  - from: "$test$"
     to: "test_rewrite"
-  - from: "_day_number_"
+  - from: "$day_number$"
     to: "{{day_number}}"
 args:
   day_number: "2"

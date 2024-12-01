@@ -19,4 +19,4 @@ test:
     ls output/subdir1/subdir-file1.txt && echo "Test passed" || echo -e "\033[0;31mTest failed: output/subdir1/subdir-file1.txt does not exist\033[0m"
     # Check contents of files
     diff output/file1.txt test-validations/file1.txt && echo "Test passed" || echo -e "\033[0;31mTest failed: Content mismatch in output/file1.txt vs test-validations/file1.txt\033[0m"
-    diff output/file2.txt test-validations/file2.txt && echo "Test passed" || echo -e "\033[0;31mTest failed: Content mismatch in output/file2.txt vs test-validations/file2.txt\033[0m"
+    diff output/file2.txt test-validations/file1.txt && echo "Test passed" || echo -e "\033[0;31mTest failed: Content mismatch in output/file2.txt vs test-validations/file1.txt\033[0m"
