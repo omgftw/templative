@@ -43,8 +43,8 @@ fn process_path(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Conf
         if path.is_file() && path.extension().map_or(false, |ext| ext == "tmpl") {
             process_file(path.to_str().unwrap(), dynamic_pairs, config, root_path, output_path)?;
         }
-        if path.is_file() && path.extension().map_or(false, |ext| ext == "tmpl_chunk") {
-            process_chunk(path.to_str().unwrap(), dynamic_pairs, config, root_path)?;
+        if path.is_file() && path.extension().map_or(false, |ext| ext.to_str().unwrap().starts_with("tmpl_")) {
+            process_chunk(path.to_str().unwrap(), dynamic_pairs, config, root_path, output_path)?;
         }
     }
     Ok(())
@@ -87,38 +87,38 @@ fn process_file(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Conf
     Ok(())
 }
 
-fn process_chunk(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Config, root_path: &Path) -> eyre::Result<()> {
-    // Read the chunk template content
+fn process_chunk(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Config, root_path: &Path, output_path: &str) -> eyre::Result<()> {
+    // Read and render the chunk template
     let template_content = std::fs::read_to_string(path)?;
     let handlebars = handlebars::Handlebars::new();
-
-    // Create template data from dynamic pairs
     let mut data = serde_json::Map::new();
     for (key, value) in dynamic_pairs {
         data.insert(key.clone(), serde_json::Value::String(value.clone()));
     }
-    
-    // Render the chunk template
     let rendered_chunk = handlebars.render_template(&template_content, &data)?;
     
-    // Get the target file path by removing .tmpl_* extension and applying rewrites
+    // Get the target file path without the trailing dot
     let file_path = Path::new(path);
     let file_name = file_path.file_name().unwrap().to_str().unwrap();
     let chunk_id = file_name.split("tmpl_").nth(1).unwrap();
-    let mut target_path = path[..path.len() - chunk_id.len() - 5].to_string(); // Remove .tmpl_chunk_id
+    let mut target_path = path[..path.rfind('.').unwrap()].to_string(); // Remove .tmpl_chunk_id and trailing dot
     
     // Apply path rewrites
     for rewrite in &config.path_rewrites {
         target_path = target_path.replace(&rewrite.from, &rewrite.to);
     }
     
-    // Read the target file content
-    let file_content = std::fs::read_to_string(&target_path)?;
+    // Convert to relative path and combine with output_path
+    let relative_path = Path::new(&target_path)
+        .strip_prefix(root_path)
+        .unwrap_or(Path::new(&target_path));
+    let final_target_path = Path::new(output_path).join(relative_path);
     
-    // Split the content into lines
+    println!("Final target path: {}", final_target_path.display());
+    // Read and modify the target file
+    let file_content = std::fs::read_to_string(&final_target_path)?;
     let lines: Vec<&str> = file_content.lines().collect();
     
-    // Find the insertion point and build new content
     let mut new_content = String::new();
     for line in lines {
         if line.contains(chunk_id) {
@@ -129,8 +129,8 @@ fn process_chunk(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Con
         new_content.push('\n');
     }
     
-    // Write the modified content back to the file
-    std::fs::write(target_path, new_content)?;
+    // Write the modified content back
+    std::fs::write(final_target_path, new_content)?;
     
     Ok(())
 }
