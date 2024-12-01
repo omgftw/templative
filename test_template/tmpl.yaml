@@ -1,3 +1,5 @@
 path_rewrites:
   - from: "_test_"
     to: "test_rewrite"
+  - from: "_day_number_"
+    to: "{{day_number}}"

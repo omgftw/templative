@@ -50,6 +50,20 @@ fn process_path(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Conf
     Ok(())
 }
 
+fn apply_path_rewrites(path: &str, rewrites: &[PathRewrite], data: &serde_json::Map<String, serde_json::Value>) -> eyre::Result<String> {
+    let handlebars = handlebars::Handlebars::new();
+    let mut result = path.to_string();
+    
+    for rewrite in rewrites {
+        // Render both 'from' and 'to' patterns using handlebars
+        let from_pattern = handlebars.render_template(&rewrite.from, data)?;
+        let to_pattern = handlebars.render_template(&rewrite.to, data)?;
+        result = result.replace(&from_pattern, &to_pattern);
+    }
+    
+    Ok(result)
+}
+
 fn process_file(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Config, root_path: &Path, output_path: &str) -> eyre::Result<()> {
     let template_content = std::fs::read_to_string(path)?;
     let handlebars = handlebars::Handlebars::new();
@@ -64,9 +78,7 @@ fn process_file(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Conf
     
     // Get output path by removing .tmpl extension and applying path rewrites
     let mut file_path = path.strip_suffix(".tmpl").unwrap().to_string();
-    for rewrite in &config.path_rewrites {
-        file_path = file_path.replace(&rewrite.from, &rewrite.to);
-    }
+    file_path = apply_path_rewrites(&file_path, &config.path_rewrites, &data)?;
     
     // Convert the path to be relative to root_path
     let relative_path = Path::new(&file_path)
@@ -104,9 +116,7 @@ fn process_chunk(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Con
     let mut target_path = path[..path.rfind('.').unwrap()].to_string(); // Remove .tmpl_chunk_id and trailing dot
     
     // Apply path rewrites
-    for rewrite in &config.path_rewrites {
-        target_path = target_path.replace(&rewrite.from, &rewrite.to);
-    }
+    target_path = apply_path_rewrites(&target_path, &config.path_rewrites, &data)?;
     
     // Convert to relative path and combine with output_path
     let relative_path = Path::new(&target_path)
@@ -119,9 +129,12 @@ fn process_chunk(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Con
     let file_content = std::fs::read_to_string(&final_target_path)?;
     let lines: Vec<&str> = file_content.lines().collect();
     
+    // Create the exact marker to search for
+    let chunk_marker = format!("tmpl:{}", chunk_id);
+    
     let mut new_content = String::new();
     for line in lines {
-        if line.contains(chunk_id) {
+        if line.contains(&chunk_marker) {
             new_content.push_str(&rendered_chunk);
             new_content.push('\n');
         }
@@ -151,7 +164,7 @@ fn main() -> eyre::Result<()> {
     println!("Path: {}", args.path);
     println!("Dynamic pairs: {:?}", dynamic_pairs);
     
-    // let current_dir = std::env::current_dir()?;
+    let current_dir = std::env::current_dir()?;
     let base_path = Path::new(&args.path);
 
     let config_path = base_path.join("tmpl.yaml");
@@ -159,7 +172,7 @@ fn main() -> eyre::Result<()> {
     let config = read_config(config_path.to_str().unwrap())?;
     println!("{:?}", config);
 
-    let output_dir = args.output.as_deref().unwrap_or_else(|| base_path.to_str().unwrap());
+    let output_dir = args.output.as_deref().unwrap_or_else(|| current_dir.to_str().unwrap());
     process_path(&args.path, &dynamic_pairs, &config, base_path, output_dir)?;
     Ok(())
 }
