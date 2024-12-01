@@ -43,7 +43,10 @@ fn process_path(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Conf
         if path.is_file() && path.extension().map_or(false, |ext| ext == "tmpl") {
             process_file(path.to_str().unwrap(), dynamic_pairs, config, root_path, output_path)?;
         }
-        if path.is_file() && path.extension().map_or(false, |ext| ext.to_str().unwrap().starts_with("tmpl_")) {
+        if path.is_file() && {
+            let file_name = path.file_name().map_or("", |f| f.to_str().unwrap_or(""));
+            file_name.contains("tmpl_") || (file_name.contains(".tmpl."))
+        } {
             process_chunk(path.to_str().unwrap(), dynamic_pairs, config, root_path, output_path)?;
         }
     }
@@ -109,14 +112,31 @@ fn process_chunk(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Con
     }
     let rendered_chunk = handlebars.render_template(&template_content, &data)?;
     
-    // Get the target file path without the trailing dot
+    // Get the target file path and chunk ID using either separator
     let file_path = Path::new(path);
     let file_name = file_path.file_name().unwrap().to_str().unwrap();
-    let chunk_id = file_name.split("tmpl_").nth(1).unwrap();
-    let mut target_path = path[..path.rfind('.').unwrap()].to_string(); // Remove .tmpl_chunk_id and trailing dot
     
+    // Try to get chunk_id from either underscore or dot notation
+    let chunk_id = if file_name.contains("tmpl_") {
+        // Handle underscore separator (e.g., file.tmpl_chunk_id)
+        file_name.split("tmpl_").nth(1).unwrap()
+    } else if file_name.contains("tmpl.") {
+        // Handle dot separator (e.g., file.txt.tmpl.chunk_id)
+        file_name.split('.').rev().next().unwrap()
+    } else {
+        return Err(eyre::eyre!("No chunk ID found in file name"));
+    };
+
+    // Get base path by removing the chunk extension
+    let target_path = if file_name.contains("tmpl_") {
+        path[..path.rfind("tmpl_").unwrap()].trim_end_matches('.').to_string()
+    } else {
+        // For dot notation, remove both .tmpl and the chunk_id
+        path[..path.rfind(".tmpl.").unwrap()].to_string()
+    };
+
     // Apply path rewrites
-    target_path = apply_path_rewrites(&target_path, &config.path_rewrites, &data)?;
+    let target_path = apply_path_rewrites(&target_path, &config.path_rewrites, &data)?;
     
     // Convert to relative path and combine with output_path
     let relative_path = Path::new(&target_path)
