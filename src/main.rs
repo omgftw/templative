@@ -9,6 +9,8 @@ struct PathRewrite {
 #[derive(serde::Deserialize, Debug)]
 struct Config {
     path_rewrites: Vec<PathRewrite>,
+    #[serde(default)]
+    args: std::collections::HashMap<String, String>,
 }
 
 fn read_config(path: &str) -> eyre::Result<Config> {
@@ -42,19 +44,19 @@ enum InsertionMode {
     Insert,
 }
 
-fn process_path(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Config, root_path: &Path, output_path: &str) -> eyre::Result<()> {
+fn process_path(path: &str, args: &std::collections::HashMap<String, String>, config: &Config, root_path: &Path, output_path: &str) -> eyre::Result<()> {
     for entry in walkdir::WalkDir::new(path) {
         let entry = entry?;
         let path = entry.path();
         
         if path.is_file() && path.extension().map_or(false, |ext| ext == "tmpl") {
-            process_file(path.to_str().unwrap(), dynamic_pairs, config, root_path, output_path)?;
+            process_file(path.to_str().unwrap(), args, config, root_path, output_path)?;
         }
         if path.is_file() && {
             let file_name = path.file_name().map_or("", |f| f.to_str().unwrap_or(""));
             file_name.contains("tmpl_") || (file_name.contains(".tmpl."))
         } {
-            process_chunk(path.to_str().unwrap(), dynamic_pairs, config, root_path, output_path)?;
+            process_chunk(path.to_str().unwrap(), args, config, root_path, output_path)?;
         }
     }
     Ok(())
@@ -74,12 +76,12 @@ fn apply_path_rewrites(path: &str, rewrites: &[PathRewrite], data: &serde_json::
     Ok(result)
 }
 
-fn process_file(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Config, root_path: &Path, output_path: &str) -> eyre::Result<()> {
+fn process_file(path: &str, args: &std::collections::HashMap<String, String>, config: &Config, root_path: &Path, output_path: &str) -> eyre::Result<()> {
     let template_content = std::fs::read_to_string(path)?;
     let handlebars = handlebars::Handlebars::new();
-    // Create template data from dynamic pairs
+    
     let mut data = serde_json::Map::new();
-    for (key, value) in dynamic_pairs {
+    for (key, value) in args {
         data.insert(key.clone(), serde_json::Value::String(value.clone()));
     }
     
@@ -109,12 +111,13 @@ fn process_file(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Conf
     Ok(())
 }
 
-fn process_chunk(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Config, root_path: &Path, output_path: &str) -> eyre::Result<()> {
+fn process_chunk(path: &str, args: &std::collections::HashMap<String, String>, config: &Config, root_path: &Path, output_path: &str) -> eyre::Result<()> {
     // Read and render the chunk template
     let template_content = std::fs::read_to_string(path)?;
     let handlebars = handlebars::Handlebars::new();
+    
     let mut data = serde_json::Map::new();
-    for (key, value) in dynamic_pairs {
+    for (key, value) in args {
         data.insert(key.clone(), serde_json::Value::String(value.clone()));
     }
     let rendered_chunk = handlebars.render_template(&template_content, &data)?;
@@ -250,9 +253,16 @@ fn process_chunk(path: &str, dynamic_pairs: &Vec<(String, String)>, config: &Con
 
 fn main() -> eyre::Result<()> {
     let args = Args::parse();
+    let current_dir = std::env::current_dir()?;
+    let base_path = Path::new(&args.path);
 
-    // Convert the raw args into key-value pairs
-    let dynamic_pairs: Vec<(String, String)> = args.dynamic
+    // Read config first
+    let config_path = base_path.join("tmpl.yaml");
+    println!("Config path: {}", config_path.display());
+    let mut config = read_config(config_path.to_str().unwrap())?;
+
+    // Convert CLI args into key-value pairs
+    let cli_pairs: std::collections::HashMap<String, String> = args.dynamic
         .chunks(2)
         .map(|chunk| {
             let key = chunk[0].trim_start_matches("--").to_string();
@@ -260,19 +270,15 @@ fn main() -> eyre::Result<()> {
             (key, value)
         })
         .collect();
-        
-    println!("Path: {}", args.path);
-    println!("Dynamic pairs: {:?}", dynamic_pairs);
-    
-    let current_dir = std::env::current_dir()?;
-    let base_path = Path::new(&args.path);
 
-    let config_path = base_path.join("tmpl.yaml");
-    println!("Config path: {}", config_path.display());
-    let config = read_config(config_path.to_str().unwrap())?;
-    println!("{:?}", config);
+    // Merge CLI args into config args (CLI takes precedence)
+    config.args.extend(cli_pairs);
+    
+    println!("Path: {}", args.path);
+    println!("Combined args: {:?}", config.args);
 
     let output_dir = args.output.as_deref().unwrap_or_else(|| current_dir.to_str().unwrap());
-    process_path(&args.path, &dynamic_pairs, &config, base_path, output_dir)?;
+    // Pass config.args instead of dynamic_pairs
+    process_path(&args.path, &config.args, &config, base_path, output_dir)?;
     Ok(())
 }
